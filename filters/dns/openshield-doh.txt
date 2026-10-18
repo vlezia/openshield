@@ -1,0 +1,36 @@
+! Title: OpenShield - known DNS-over-HTTPS resolvers
+! License: GPL-3.0-or-later
+! Description: Blocks name resolution of well-known public DoH endpoints so
+!   browsers fall back to system DNS, which OpenShield can filter (ADR-002).
+!   use-application-dns.net is the Firefox canary domain; OpenShield answers
+!   it with NXDOMAIN, which tells Firefox to disable its own DoH.
+||use-application-dns.net^
+! Google
+||dns.google^
+||dns.google.com^
+||dns64.dns.google^
+! Cloudflare (also covers mozilla., chrome., 1dot1dot1dot1., family. etc.)
+||cloudflare-dns.com^
+||one.one.one.one^
+! Quad9
+||dns.quad9.net^
+||dns9.quad9.net^
+||dns10.quad9.net^
+||dns11.quad9.net^
+! Cisco OpenDNS
+||doh.opendns.com^
+||doh.familyshield.opendns.com^
+! NextDNS, AdGuard DNS, Control D, Mullvad, CleanBrowsing
+||dns.nextdns.io^
+||dns.adguard-dns.com^
+||family.adguard-dns.com^
+||unfiltered.adguard-dns.com^
+||freedns.controld.com^
+||dns.mullvad.net^
+||doh.mullvad.net^
+||doh.cleanbrowsing.org^
+! Others commonly built into browsers
+||doh.dns.sb^
+||dns.alidns.com^
+||doh.pub^
+||dns.switch.ch^

@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Platform-independent core of OpenShield.
+//! Platform-independent core of OpenShield: configuration, filter lists, the
+//! DNS domain matcher, statistics and the packet-loop watchdog.
 //!
-//! Stage 1 adds the DNS domain matcher, filter list download/cache and
-//! statistics here. Nothing in this crate may depend on WinAPI.
+//! Nothing in this crate may depend on WinAPI.
+
+pub mod config;
+pub mod filtering;
+pub mod lists;
+pub mod matcher;
+pub mod paths;
+pub mod stats;
+pub mod watchdog;
 
 /// Product name shown in logs, the CA subject and the GUI.
 pub const PRODUCT_NAME: &str = "OpenShield";

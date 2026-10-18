@@ -27,6 +27,23 @@ openshield-ipc = { path = "crates/ipc" }
 
 # External crates are added stage by stage, with versions checked on crates.io
 # at that moment and locked in Cargo.lock.
+arc-swap = "1"
+clap = { version = "4.6", features = ["derive"] }
+etherparse = "0.21"
+hickory-proto = { version = "0.26", default-features = false, features = ["std"] }
+libloading = "0.9"
+# TLS uses rustls with the ring provider (no aws-lc build) and the platform
+# certificate verifier, i.e. the Windows trust store.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "gzip", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "signal", "time", "sync", "fs"] }
+toml = "1.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+# Same version reqwest already pulls in; avoids a second copy.
+windows-registry = "0.6"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
