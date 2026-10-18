@@ -1,0 +1,11 @@
+[package]
+name = "openshield-dns"
+description = "DNS query interception and forged responses for blocked domains."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+# PowerShell and batch files keep Windows line endings
+*.ps1 text eol=crlf
+*.psm1 text eol=crlf
+*.psd1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.png binary
+*.ico binary
+*.zip binary

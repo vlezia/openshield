@@ -1,0 +1,15 @@
+[package]
+name = "openshield-service"
+description = "OpenShield Windows service; --console runs it in the foreground for debugging."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openshield-core.workspace = true
+openshield-ipc.workspace = true

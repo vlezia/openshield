@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/core",
+  "crates/dns",
+  "crates/intercept",
+  "crates/proxy",
+  "crates/ipc",
+  "crates/service",
+  "crates/cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "GPL-3.0-or-later"
+authors = ["Vlezia and OpenShield contributors"]
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+openshield-core = { path = "crates/core" }
+openshield-dns = { path = "crates/dns" }
+openshield-intercept = { path = "crates/intercept" }
+openshield-proxy = { path = "crates/proxy" }
+openshield-ipc = { path = "crates/ipc" }
+
+# External crates are added stage by stage, with versions checked on crates.io
+# at that moment and locked in Cargo.lock.
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unwrap_used = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

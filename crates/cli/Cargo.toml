@@ -1,0 +1,15 @@
+[package]
+name = "openshield-cli"
+description = "Command-line client for the OpenShield service."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openshield-core.workspace = true
+openshield-ipc.workspace = true

@@ -1,0 +1,27 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Third-party binaries fetched by scripts/dev-setup.ps1 (never committed)
+/third_party/
+
+# Local runtime data when running the service with --console
+/dev-data/
+
+# Node / Tauri (stage 2)
+node_modules/
+/gui/dist/
+/gui/src-tauri/target/
+
+# Secrets: a CA key must never end up in the repository
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
