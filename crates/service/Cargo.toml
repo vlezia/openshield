@@ -7,9 +7,24 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
-[lints]
-workspace = true
+[features]
+# Adds --debug-stall-after for testing the watchdog. Development only.
+fault-injection = ["openshield-dns/fault-injection"]
 
 [dependencies]
+arc-swap.workspace = true
+clap.workspace = true
 openshield-core.workspace = true
+openshield-dns.workspace = true
+openshield-intercept.workspace = true
 openshield-ipc.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+libloading.workspace = true
+windows-registry.workspace = true
+
+[lints]
+workspace = true

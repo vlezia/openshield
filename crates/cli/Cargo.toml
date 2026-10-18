@@ -11,5 +11,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+clap.workspace = true
 openshield-core.workspace = true
 openshield-ipc.workspace = true
+tokio.workspace = true
