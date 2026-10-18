@@ -20,7 +20,9 @@ to acknowledge reports within 7 days.
 | Upstream TLS | Real MITM attack hidden by our re-signing | Strict upstream verification; on failure the user gets an error page, never our certificate |
 | IPC pipe | Unprivileged process reconfigures filtering | Pipe ACL: Administrators + interactive user; config changes only from them |
 | Filter lists | Code execution from a malicious list | Lists are data; only scriptlets from the trusted resource set are injected |
-| Packet capture | Process hang breaks networking | Fail open; proxy watchdog (ADR-004) |
+| Packet capture | Process hang breaks networking | Fail open; packet-loop and proxy watchdogs (ADR-004) |
+| `WinDivert.dll` | DLL planting / hijacking | Loaded by absolute path from an explicit directory, dependency search limited to that directory and System32 (ADR-009); install directory writable by administrators only (stage 4) |
+| DNS queries | Browsing history leaks to disk | Statistics in memory only; no query log by default (ADR-010) |
 
 ## Local root CA rules
 

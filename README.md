@@ -7,8 +7,20 @@ browser: DNS filtering for every application, plus HTTPS filtering (network
 rules, cosmetic filters, scriptlets) for selected applications — browsers by
 default. It does one thing; there is no VPN, parental control or antivirus.
 
-> **Status: early development (stage 0 — project skeleton).** Nothing is
-> usable yet. Do not install development builds on a machine you depend on.
+> **Status: early development (stage 1 — DNS filtering, console mode).**
+> There is no installer or GUI yet; DNS filtering runs from an elevated
+> console for development (see [docs/TESTING.md](docs/TESTING.md)). Do not use
+> development builds on a machine you depend on.
+
+## Try it (developers)
+
+```powershell
+cargo build --release
+.\target\release\openshield-cli.exe --data-dir dev-data lists update
+.\target\release\openshield-cli.exe --data-dir dev-data test ad.doubleclick.net
+# DNS filtering (elevated PowerShell, WinDivert from scripts\dev-setup.ps1):
+.\target\release\openshield-service.exe --console --data-dir dev-data --windivert-dir third_party\windivert\WinDivert-2.2.2-A\x64
+```
 
 ## Planned features
 
@@ -35,8 +47,12 @@ default. It does one thing; there is no VPN, parental control or antivirus.
 - Ads served from the same domain as content (e.g. YouTube) cannot be blocked
   by DNS alone; HTTPS filtering helps but is not complete.
 - Apps that use certificate pinning are not HTTPS-filtered (DNS only).
-- Browsers configured to use DNS-over-HTTPS with a custom provider can bypass
-  DNS filtering (see ADR-002).
+- Browsers configured to use DNS-over-HTTPS with a custom provider, and
+  Windows' own DNS over HTTPS, bypass DNS filtering; OpenShield warns when it
+  detects system DoH (see ADR-002).
+- DNS lists: regex and wildcard rules are not supported yet and are skipped
+  (`openshield-cli lists lint <id>` shows them); see ADR-001.
+- Local DNS resolvers on `127.0.0.1` (some VPN clients) are not filtered.
 - Some antivirus products flag the WinDivert packet capture driver as a
   potentially unwanted tool (see ADR-005).
 
@@ -45,6 +61,7 @@ default. It does one thing; there is no VPN, parental control or antivirus.
 - [Architecture and decision records](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md)
 - [Building](docs/BUILDING.md)
+- [Testing and manual checklists](docs/TESTING.md)
 
 ## License
 

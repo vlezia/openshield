@@ -6,8 +6,8 @@ DNS filtering for all processes, plus HTTPS filtering for selected
 applications (browsers by default). It deliberately does nothing else: no VPN,
 parental control or antivirus.
 
-**Status:** stage 0 (skeleton). Components below are the target design; each
-section says in which stage it lands.
+**Status:** stage 1 (DNS filtering in console mode). Components below are the
+target design; each section says in which stage it lands.
 
 ## Principles
 
@@ -41,23 +41,41 @@ section says in which stage it lands.
 
 | Crate | Role | Stage |
 |---|---|---|
-| `crates/core` | DNS domain matcher, list download and cache, config, statistics. No WinAPI. | 1 |
-| `crates/dns` | Parse captured DNS queries, forge answers for blocked domains. | 1 |
-| `crates/intercept` | `trait Interceptor` and the WinDivert backend (DNS capture, TCP redirect, NAT table, PID attribution). | 0 (trait), 1, 3 |
+| `crates/core` | Config, list catalog/download/cache, DNS domain matcher, in-memory statistics, watchdog. No WinAPI. | 1 ✅ |
+| `crates/dns` | Per-packet DNS decisions (forged answers, TCP RST) and the packet loop. | 1 ✅ |
+| `crates/intercept` | `trait Interceptor`, mock for tests, WinDivert backend loaded at runtime. Later: TCP redirect, NAT table, PID attribution. | 1 ✅, 3 |
 | `crates/proxy` | MITM proxy, CA manager, adblock-rust network/cosmetic filtering, HTML injection. | 3 |
 | `crates/ipc` | GUI/CLI ↔ service message types. | 2 |
-| `crates/service` | Windows service binary, `--console` mode for development. | 1, 2 |
-| `crates/cli` | `openshield-cli`: status, enable/disable, lists update, test URL. | 1, 2 |
+| `crates/service` | `--console` mode (stage 1); Windows service (stage 2). | 1 ✅, 2 |
+| `crates/cli` | `openshield-cli`: `lists update/show/lint`, `test <domain>`; status/enable/disable in stage 2. | 1 ✅, 2 |
 | `gui/` | Tauri v2 + React + TypeScript tray app. | 2 |
 
 ### DNS filtering (stage 1)
 
-WinDivert captures outgoing DNS queries (UDP/TCP 53). For a blocked domain we
-inject a forged answer (`0.0.0.0` / `::` or NXDOMAIN, configurable) and drop
-the original; everything else is reinjected unchanged. We do not run our own
-DNS server and do not touch adapter settings, so when the process dies the
-driver releases the traffic. `DnsFlushResolverCache` runs after filtering is
-toggled.
+```
+app ──DNS query──► Windows network stack ──► WinDivert (outbound, UDP/TCP 53, !loopback)
+                                                  │
+                                    openshield-dns packet loop (hot path:
+                                    no I/O, no locks; heartbeat per packet)
+                                       │                        │
+                              not blocked: reinject     blocked: drop original,
+                                                        inject forged answer
+                                                        (UDP) or RST (TCP)
+watchdog thread: packet "in progress" > stall timeout → WinDivertShutdown → fail open
+```
+
+WinDivert captures outgoing DNS queries (filter in `openshield_dns::WINDIVERT_FILTER`).
+For a blocked domain we inject a forged answer from the DNS server's address
+(`0.0.0.0` / `::`, empty answer for other record types, or NXDOMAIN —
+configurable) and drop the original; for DNS over TCP we reset the connection
+(ADR-011). Everything else is reinjected unchanged. We do not run our own DNS
+server and do not touch adapter settings, so when the process dies or the
+handle is shut down the driver releases the traffic. `DnsFlushResolverCache`
+runs when filtering starts and stops.
+
+Data directory (`%ProgramData%\OpenShield`, or `--data-dir`): `config.toml`,
+`lists/<id>.txt` + `<id>.meta.toml`, `user_rules.txt`, `allowlist.txt`. No
+query history is stored (ADR-010).
 
 ### HTTPS filtering (stage 3)
 
@@ -90,12 +108,39 @@ Short ADRs. Status values: *Accepted*, *Proposed*, *Superseded by ADR-NNN*.
   syntax (`$dnsrewrite`, `$client`, `$dnstype`, `$important`) that adblock-rust
   does not support. adblock-rust also expects a full request (URL, source URL,
   resource type), which a DNS query does not have.
-- **Decision:** `crates/core` gets a small domain matcher: `||domain^`,
-  `@@||domain^`, hosts-file lines (`0.0.0.0 domain`) and plain domains, matched
-  by walking domain suffixes in a hash set. Unsupported modifiers are skipped
-  and counted. adblock-rust is used only by the HTTPS proxy.
+- **Decision:** `crates/core` gets its own domain matcher (two hash maps,
+  lookups walk the domain suffixes; ~0.1 s to load ~260k domains). Semantics
+  follow the [AdGuard DNS filtering syntax](https://adguard-dns.io/kb/general/dns-filtering-syntax/)
+  (checked 2026-10-18):
+  - `||example.org^` blocks the domain **and subdomains**; `@@` allows them.
+  - Hosts lines (`0.0.0.0 example.org`) and bare domains (`example.org`) match
+    **exactly**, without subdomains. Only `0.0.0.0`, `::` and loopback
+    addresses block; other addresses are rewrites in AdGuard Home and are
+    skipped. `localhost`-style names are ignored.
+  - `$important` beats non-important rules including exceptions;
+    `@@...$important` beats `...$important`.
+  - `$badfilter` disables rules with the same pattern, exception flag and
+    `$important` flag (a structural match instead of AdGuard's textual one;
+    differences only in modifier order are therefore ignored). Hosts rules
+    are not affected, as in AdGuard.
+  - Any other modifier (`$client`, `$dnsrewrite`, `$dnstype`, `$denyallow`,
+    `$ctag`, `$third-party`, …) makes us **skip the whole rule**, as the
+    AdGuard docs require for unknown modifiers; it is never turned into a
+    plain block.
+  - `||example.org` without `^` is matched like `||example.org^`. AdGuard also
+    matches continuations such as `example.org.cn`, so we block a strict
+    subset of what AdGuard blocks, never more.
+  - Regular expressions, wildcards (`*`), `||example.` TLD wildcards,
+    leading-dot and other substring patterns, `|` anchors and cosmetic rules
+    are skipped and counted as unsupported (`openshield-cli lists lint`).
+  - Priority, strongest first: allowlist (domain + subdomains), user rules,
+    filter lists; within a group `@@$important`, `$important`, `@@`, block.
+  adblock-rust is used only by the HTTPS proxy.
 - **Consequences:** Two engines and two list parsers to maintain, but each is
   simple and correct for its layer. DNS matching stays fast and predictable.
+  About 0.3 % of AdGuard DNS filter lines (mostly wildcards and regexes) are
+  skipped today; wildcard support can be added later without changing
+  semantics of the rest.
 
 ### ADR-002: Mitigate DNS-over-HTTPS bypass
 
@@ -103,13 +148,20 @@ Short ADRs. Status values: *Accepted*, *Proposed*, *Superseded by ADR-NNN*.
 - **Context:** Chrome and Edge auto-upgrade to DoH when the system resolver is
   a known DoH provider (Google, Cloudflare, …); Firefox has its own DoH (TRR).
   Such queries never hit port 53, so the DNS filter does not see them.
-- **Decision:** Stage 1 blocks resolution of well-known DoH endpoints and the
-  Firefox canary domain `use-application-dns.net`, which makes browsers fall
-  back to system DNS. In stage 3 filtered browsers go through the proxy anyway.
-  The remaining gap is documented in the README.
+- **Decision:** Stage 1 blocks resolution of well-known DoH endpoints (the
+  built-in `openshield-doh` list, `filters/dns/openshield-doh.txt`) so browsers
+  fall back to system DNS. The Firefox canary domain `use-application-dns.net`
+  is always answered with **NXDOMAIN** (a `0.0.0.0` answer would not disable
+  Firefox's DoH). In stage 3 filtered browsers go through the proxy anyway.
+  Windows 11's own DoH sends system queries over HTTPS too; at startup the
+  service looks for signs of it (`DoHPolicy` policy, `EnableAutoDoh`,
+  `DohFlags` of well-known servers, per-interface `DohInterfaceSettings`) and
+  warns that the DNS filter cannot see those queries. There is no official API
+  for this, so the check is best-effort.
 - **Consequences:** Browsers with DoH configured by hand to an unknown
-  provider can still bypass DNS filtering. We do not change browser DoH
-  policies without consent.
+  provider, and system DoH configurations the heuristic misses, can still
+  bypass DNS filtering. We do not change browser or system DoH settings
+  without consent.
 
 ### ADR-003: Attribute connections to processes via the WinDivert SOCKET layer
 
@@ -123,19 +175,32 @@ Short ADRs. Status values: *Accepted*, *Proposed*, *Superseded by ADR-NNN*.
 - **Consequences:** One more WinDivert handle. Entries must expire on
   `CLOSE` events and by TTL to keep the table bounded.
 
-### ADR-004: Proxy watchdog for hangs
+### ADR-004: Watchdogs for hangs (packet loops and proxy)
 
-- **Status:** Accepted (2026-10-18)
+- **Status:** Accepted (2026-10-18); packet-loop part implemented in stage 1
 - **Context:** WinDivert fails open when our process dies (the handle closes),
-  but not when the proxy hangs: traffic is still redirected into a proxy that
-  no longer answers.
-- **Decision:** A watchdog thread, independent of the proxy's async runtime,
-  checks proxy health periodically (accepting and answering a loopback
-  connection within a deadline). On failure it closes the redirect handle so
-  traffic flows directly, logs the event and tries to restart the proxy.
+  but not when we hang: diverted packets queue up for a loop that no longer
+  processes them, and DNS (later: redirected TCP) stops working.
+- **Decision:**
+  - **Packet loops (stage 1).** The hot loop does no network or disk I/O and
+    takes no locks: policy is read via `ArcSwap`, statistics via atomics and a
+    non-blocking channel. Each packet is bracketed by `Heartbeat::begin/end`
+    (atomic stores). A separate watchdog thread checks every timeout/4; if a
+    packet has been in progress longer than `watchdog.stall_timeout_ms`
+    (default 3000 ms, above WinDivert's default queue time), it calls
+    `WinDivertShutdown`, so the driver stops diverting and traffic flows
+    unfiltered. An idle loop waiting for packets is not a stall. In console
+    mode the process then exits with code 2; the stuck thread never touches a
+    closed handle because the handle is only closed on drop.
+  - **Proxy (stage 3).** Same mechanism for the redirect loop, plus a health
+    check of the proxy (accept and answer a loopback connection within a
+    deadline); on failure the redirect handle is shut down and the proxy
+    restarted.
+  - A `fault-injection` cargo feature (development only) adds
+    `--debug-stall-after N` to simulate a hang for manual testing.
 - **Consequences:** A brief window of unfiltered traffic after a hang, which is
-  acceptable under the fail-open principle. Health check deadline and interval
-  are configurable.
+  acceptable under the fail-open principle. Packets held by the stuck loop at
+  that moment are lost; DNS clients retry.
 
 ### ADR-005: Antivirus false positives and code signing
 
@@ -196,6 +261,55 @@ Short ADRs. Status values: *Accepted*, *Proposed*, *Superseded by ADR-NNN*.
   licenses are listed in `THIRD_PARTY_NOTICES.md`.
 - **Consequences:** Some lists are subscription-only (no bundled copy). The
   fallback set is smaller than the default subscriptions.
+
+### ADR-009: Load WinDivert at runtime with minimal own bindings
+
+- **Status:** Accepted (2026-10-18)
+- **Context:** Linking WinDivert statically (the `vendored`/`static` features
+  of the `windivert` crates) would put WinDivert code into our executables,
+  which antivirus products already flag (ADR-005). Linking dynamically through
+  an import library needs `WinDivert.lib` at build time, so CI and every
+  contributor would have to download WinDivert just to compile. The
+  `windivert` crate (0.6.0) had its last release in 2025 and few users.
+- **Decision:** `crates/intercept` loads the official signed `WinDivert.dll`
+  at runtime with `libloading`, by absolute path from an explicit directory
+  (`--windivert-dir`, default: next to the executable), with dependency
+  search limited to that directory and System32. We bind the eight functions
+  we use (`WinDivertOpen/Recv/Send/Shutdown/Close/GetParam`,
+  `WinDivertHelperCalcChecksums`) and define `WINDIVERT_ADDRESS` ourselves
+  (size checked at compile time). Packet building and parsing stay in pure
+  Rust (`etherparse`), so all filtering logic is testable without the driver.
+  Only WinDivert 2.x drivers are accepted.
+- **Consequences:** A small `unsafe` FFI surface to maintain (one module, each
+  block with a SAFETY comment). Builds and tests need no WinDivert files. The
+  directory holding the DLL must not be writable by non-administrators once
+  the service runs as SYSTEM (installer, stage 4).
+
+### ADR-010: Statistics in memory only
+
+- **Status:** Accepted (2026-10-18)
+- **Context:** DNS queries reveal browsing history.
+- **Decision:** Totals and per-domain counters (bounded to 20,000 domains,
+  least-seen evicted) live in memory only and disappear when the process
+  exits. No query log is written to disk by default; console output (top
+  domains, debug logs) goes to the terminal only. A persistent blocked-request
+  log for the GUI (stage 2) will be opt-in, bounded and clearable.
+- **Consequences:** Statistics reset on restart. Diagnosing a problem after
+  the fact needs the user to reproduce it.
+
+### ADR-011: DNS over TCP: reset instead of forged answers
+
+- **Status:** Accepted (2026-10-18)
+- **Context:** Forging a DNS answer inside an existing TCP stream needs exact
+  sequence handling and breaks easily; DNS over TCP is rare for normal
+  lookups.
+- **Decision:** Only TCP segments to port 53 with payload are diverted (the
+  handshake is never touched). If a segment carries exactly one complete
+  query for a blocked domain, it is dropped and a `RST|ACK` is sent to the
+  client (seq = the segment's ack number, ack = seq + payload length). Other
+  segments pass unchanged.
+- **Consequences:** Blocked names fail to resolve over TCP instead of
+  resolving to `0.0.0.0`. Queries split across segments are not filtered.
 
 ## Future (not now)
 
