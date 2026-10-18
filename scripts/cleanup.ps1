@@ -103,7 +103,9 @@ Invoke-Step 'service' {
 }
 
 # 3. Policies and registry values from the rollback journal
-function Restore-FirefoxPolicy($change) {
+function Restore-FirefoxPolicy {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param($change)
     $path = $change.path
     if (-not (Test-Path $path)) { return }
     $json = Get-Content -Raw -Path $path | ConvertFrom-Json
@@ -128,7 +130,9 @@ function Restore-FirefoxPolicy($change) {
     }
 }
 
-function Restore-RegistryValue($change) {
+function Restore-RegistryValue {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param($change)
     if (-not (Test-Path $change.key)) { return }
     if (-not $PSCmdlet.ShouldProcess("$($change.key)\$($change.name)", 'Restore registry value')) { return }
     if ($null -eq $change.previous) {
