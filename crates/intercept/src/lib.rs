@@ -1,120 +1,60 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Traffic interception abstraction.
 //!
-//! The rest of OpenShield talks to the network stack only through
-//! [`Interceptor`], so Linux and macOS backends can be added later without
-//! touching the filtering code. The WinDivert backend arrives in stage 1.
+//! Packet loops talk to the network stack only through [`Interceptor`], so
+//! Linux and macOS backends can be added later without touching filtering
+//! code. The Windows backend is [`windivert::WinDivert`].
 //!
-//! Every implementation must fail open: when an interceptor stops, errors out
-//! or its process dies, traffic must keep flowing unfiltered.
+//! Every implementation must fail open: after [`Interceptor::shutdown`], an
+//! error, or the death of the process, traffic keeps flowing unfiltered.
 
-use std::error::Error;
-use std::fmt;
-
-/// What an interceptor captures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InterceptKind {
-    /// Outgoing DNS queries (UDP/TCP 53) of all processes.
-    Dns,
-    /// TCP 80/443 of selected processes, redirected to the local proxy.
-    Https,
-}
+#[cfg(any(test, feature = "mock"))]
+pub mod mock;
+#[cfg(windows)]
+pub mod windivert;
 
 /// Errors reported by an [`Interceptor`].
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum InterceptError {
-    /// The backend is not available on this platform or build.
+    /// [`Interceptor::shutdown`] was called; the loop should exit.
+    #[error("capture was shut down")]
+    Shutdown,
+    /// No backend for this platform.
+    #[error("interception is not supported on this platform")]
     Unsupported,
-    /// The packet capture driver reported an error.
-    Driver(String),
+    /// The capture library could not be loaded.
+    #[error("cannot load {path}: {message}")]
+    Load { path: String, message: String },
+    /// An OS or driver call failed.
+    #[error("{op} failed: {message} (os error {code})")]
+    Os {
+        op: &'static str,
+        code: i32,
+        message: String,
+    },
 }
 
-impl fmt::Display for InterceptError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unsupported => f.write_str("interception is not supported on this platform"),
-            Self::Driver(msg) => write!(f, "packet capture driver error: {msg}"),
-        }
-    }
-}
-
-impl Error for InterceptError {}
-
-/// A source of intercepted traffic.
+/// A source of intercepted packets.
 ///
-/// The interface is provisional and will be refined when the WinDivert backend
-/// is implemented in stage 1.
-pub trait Interceptor: Send {
-    /// What this interceptor captures.
-    fn kind(&self) -> InterceptKind;
+/// Methods take `&self` so one thread can block in [`recv`](Self::recv)
+/// while another (the watchdog) calls [`shutdown`](Self::shutdown).
+pub trait Interceptor: Send + Sync {
+    /// Per-packet metadata needed to reinject or answer a packet.
+    type Meta: Send;
 
-    /// Starts capturing. On error nothing may stay captured.
-    fn start(&mut self) -> Result<(), InterceptError>;
+    /// Blocks until a packet is captured; returns its length in `buf`.
+    /// Returns [`InterceptError::Shutdown`] once the capture is shut down.
+    fn recv(&self, buf: &mut [u8]) -> Result<(usize, Self::Meta), InterceptError>;
 
-    /// Stops capturing and releases the driver handle. Must be idempotent.
-    fn stop(&mut self) -> Result<(), InterceptError>;
+    /// Lets a captured packet continue unchanged.
+    fn reinject(&self, packet: &[u8], meta: &Self::Meta) -> Result<(), InterceptError>;
 
-    /// Whether capture is currently active.
-    fn is_running(&self) -> bool;
-}
+    /// Sends `packet` in the opposite direction of `original`, e.g. a forged
+    /// DNS answer to the application that sent the query. Checksums are
+    /// recomputed by the backend.
+    fn inject_reply(&self, packet: &[u8], original: &Self::Meta) -> Result<(), InterceptError>;
 
-/// Interceptor that captures nothing. Used on unsupported platforms and in tests.
-#[derive(Debug)]
-pub struct NoopInterceptor {
-    kind: InterceptKind,
-    running: bool,
-}
-
-impl NoopInterceptor {
-    /// Creates a stopped no-op interceptor of the given kind.
-    pub fn new(kind: InterceptKind) -> Self {
-        Self {
-            kind,
-            running: false,
-        }
-    }
-}
-
-impl Interceptor for NoopInterceptor {
-    fn kind(&self) -> InterceptKind {
-        self.kind
-    }
-
-    fn start(&mut self) -> Result<(), InterceptError> {
-        self.running = true;
-        Ok(())
-    }
-
-    fn stop(&mut self) -> Result<(), InterceptError> {
-        self.running = false;
-        Ok(())
-    }
-
-    fn is_running(&self) -> bool {
-        self.running
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn noop_start_stop_is_idempotent() -> Result<(), InterceptError> {
-        let mut i = NoopInterceptor::new(InterceptKind::Dns);
-        assert!(!i.is_running());
-        i.start()?;
-        assert!(i.is_running());
-        i.stop()?;
-        i.stop()?;
-        assert!(!i.is_running());
-        assert_eq!(i.kind(), InterceptKind::Dns);
-        Ok(())
-    }
-
-    #[test]
-    fn interceptor_is_object_safe() {
-        let boxed: Box<dyn Interceptor> = Box::new(NoopInterceptor::new(InterceptKind::Https));
-        assert_eq!(boxed.kind(), InterceptKind::Https);
-    }
+    /// Stops capturing new packets; traffic flows unfiltered from now on.
+    /// Safe to call from any thread, more than once.
+    fn shutdown(&self) -> Result<(), InterceptError>;
 }

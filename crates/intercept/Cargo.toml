@@ -7,5 +7,15 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+# In-memory interceptor for tests of packet loops (no driver needed).
+mock = []
+
+[dependencies]
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+libloading.workspace = true
+
 [lints]
 workspace = true
