@@ -1,29 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! DNS filtering.
 //!
-//! Stage 1: outgoing DNS queries are captured through an `Interceptor`; queries
-//! for blocked domains get a forged answer (`0.0.0.0` / `::` or NXDOMAIN) and
-//! the original packet is dropped. Everything else passes through unchanged.
+//! Outgoing DNS queries are captured through an `Interceptor`. Queries for
+//! blocked domains get a forged answer (`0.0.0.0` / `::`, or NXDOMAIN) over
+//! UDP, or a TCP reset over TCP; the original packet is dropped. Everything
+//! else is reinjected unchanged.
+
+pub mod packet;
+pub mod run;
 
 /// Standard DNS port, captured for both UDP and TCP.
 pub const DNS_PORT: u16 = 53;
 
-/// How a blocked query is answered.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum BlockingMode {
-    /// `A 0.0.0.0` / `AAAA ::` with a short TTL.
-    #[default]
-    NullIp,
-    /// `NXDOMAIN` response code.
-    NxDomain,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn null_ip_is_default_mode() {
-        assert_eq!(BlockingMode::default(), BlockingMode::NullIp);
-    }
-}
+/// WinDivert filter for outbound DNS. Loopback (local resolvers/proxies) and
+/// our own injected packets are excluded; for TCP only data segments are
+/// diverted, so handshakes are never touched.
+pub const WINDIVERT_FILTER: &str = "outbound and !loopback and !impostor and \
+     (udp.DstPort == 53 or (tcp.DstPort == 53 and tcp.PayloadLength > 0))";

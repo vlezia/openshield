@@ -7,5 +7,21 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[features]
+# Debug-only fault injection (artificial packet-loop hang) for testing the
+# watchdog. Never enabled in release builds.
+fault-injection = []
+
+[dependencies]
+arc-swap.workspace = true
+etherparse.workspace = true
+hickory-proto.workspace = true
+openshield-core.workspace = true
+openshield-intercept.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+openshield-intercept = { workspace = true, features = ["mock"] }
+
 [lints]
 workspace = true
