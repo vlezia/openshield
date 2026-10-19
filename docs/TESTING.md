@@ -1,5 +1,7 @@
 # Testing
 
+Русская версия с подробными пошаговыми инструкциями: [TESTING.ru.md](TESTING.ru.md).
+
 ## Automated (CI and local)
 
 ```powershell
