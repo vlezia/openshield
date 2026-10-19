@@ -304,12 +304,21 @@ Short ADRs. Status values: *Accepted*, *Proposed*, *Superseded by ADR-NNN*.
   sequence handling and breaks easily; DNS over TCP is rare for normal
   lookups.
 - **Decision:** Only TCP segments to port 53 with payload are diverted (the
-  handshake is never touched). If a segment carries exactly one complete
-  query for a blocked domain, it is dropped and a `RST|ACK` is sent to the
-  client (seq = the segment's ack number, ack = seq + payload length). Other
-  segments pass unchanged.
+  handshake is never touched). Queries may be split across segments (e.g.
+  the 2-byte length prefix and the message sent separately), so the loop
+  keeps a small per-flow reassembly buffer (owned by the loop thread, at most
+  256 flows and 4 KiB per query, stale entries dropped after 10 s). Segments
+  before the one completing a query pass unchanged. If the completed query is
+  for a blocked domain, the completing segment is dropped and a `RST|ACK` is
+  sent to the client (seq = the segment's ack number, ack = segment seq +
+  payload length). Out-of-order segments restart reassembly; anything we
+  cannot reassemble passes (fail open).
 - **Consequences:** Blocked names fail to resolve over TCP instead of
-  resolving to `0.0.0.0`. Queries split across segments are not filtered.
+  resolving to `0.0.0.0`. The server may already have received the first
+  bytes of the query; it times out the connection on its own.
+- **Update 2026-10-19:** the first version only handled single-segment
+  queries; the manual check `nslookup -vc doubleclick.net` returned real
+  addresses, so reassembly was added.
 
 ## Future (not now)
 

@@ -17,6 +17,7 @@ use openshield_core::config::DnsBlockingMode;
 use openshield_core::matcher::{Matcher, normalize_domain};
 
 use crate::DNS_PORT;
+use crate::tcp::{Feed, FlowKey, TcpReassembly};
 
 /// Firefox's DoH canary: an NXDOMAIN answer makes Firefox disable its own
 /// DNS-over-HTTPS (ADR-002). A `0.0.0.0` answer would not.
@@ -65,8 +66,9 @@ impl Decision {
     }
 }
 
-/// Decides what to do with one outbound packet.
-pub fn decide(packet: &[u8], policy: &Policy) -> Decision {
+/// Decides what to do with one outbound packet. `tcp` keeps partial
+/// DNS-over-TCP queries between calls.
+pub fn decide(packet: &[u8], policy: &Policy, tcp_state: &mut TcpReassembly) -> Decision {
     let Ok(sliced) = SlicedPacket::from_ip(packet) else {
         return Decision::pass();
     };
@@ -99,26 +101,30 @@ pub fn decide(packet: &[u8], policy: &Policy) -> Decision {
             }
         }
         Some(TransportSlice::Tcp(tcp)) if tcp.destination_port() == DNS_PORT => {
-            // DNS over TCP: 2-byte length prefix. We only look at segments
-            // that carry exactly one whole query; anything else passes.
-            let payload = tcp.payload();
-            if payload.len() < 2 {
-                return Decision::pass();
-            }
-            let declared = usize::from(u16::from_be_bytes([payload[0], payload[1]]));
-            if declared + 2 != payload.len() {
-                return Decision::pass();
-            }
-            let Some((query, response)) = evaluate(&payload[2..], policy) else {
+            // DNS over TCP: 2-byte length prefix, possibly split across
+            // segments. Segments before the one completing a query pass.
+            let segment = tcp;
+            let payload = segment.payload();
+            let key = FlowKey {
+                src,
+                sport: segment.source_port(),
+                dst,
+                dport: DNS_PORT,
+            };
+            let message = match tcp_state.feed(key, segment.sequence_number(), payload) {
+                Feed::Complete(message) => message,
+                Feed::Incomplete | Feed::GiveUp => return Decision::pass(),
+            };
+            let Some((query, response)) = evaluate(&message, policy) else {
                 return Decision::pass();
             };
             let action = if response.is_some() {
                 // Forging an answer inside the stream is fragile; reset the
                 // connection instead, the resolver then fails for this name.
-                let seq = tcp.acknowledgment_number();
+                let seq = segment.acknowledgment_number();
                 let payload_len = u32::try_from(payload.len()).unwrap_or(0);
-                let ack = tcp.sequence_number().wrapping_add(payload_len);
-                match build_tcp_rst(dst, src, DNS_PORT, tcp.source_port(), seq, ack) {
+                let ack = segment.sequence_number().wrapping_add(payload_len);
+                match build_tcp_rst(dst, src, DNS_PORT, segment.source_port(), seq, ack) {
                     Some(rst) => Action::Reply(rst),
                     None => Action::Pass,
                 }
@@ -225,6 +231,11 @@ pub(crate) mod tests {
 
     pub(crate) const CLIENT_V4: [u8; 4] = [192, 168, 1, 10];
     pub(crate) const SERVER_V4: [u8; 4] = [8, 8, 8, 8];
+
+    /// Single-packet decision with fresh TCP state (shadows `super::decide`).
+    fn decide(packet: &[u8], policy: &Policy) -> Decision {
+        super::decide(packet, policy, &mut TcpReassembly::default())
+    }
 
     pub(crate) fn policy(mode: DnsBlockingMode) -> Policy {
         let mut b = MatcherBuilder::new();
@@ -384,19 +395,80 @@ pub(crate) mod tests {
         }
     }
 
-    fn tcp_query(dns: &[u8], seq: u32, ack: u32) -> Vec<u8> {
-        let mut payload = u16::try_from(dns.len())
-            .expect("len")
-            .to_be_bytes()
-            .to_vec();
-        payload.extend_from_slice(dns);
+    fn tcp_segment(payload: &[u8], seq: u32, ack: u32) -> Vec<u8> {
         let builder = PacketBuilder::ipv4(CLIENT_V4, SERVER_V4, 128)
             .tcp(50001, 53, seq, 64240)
             .ack(ack)
             .psh();
         let mut out = Vec::new();
-        builder.write(&mut out, &payload).expect("build");
+        builder.write(&mut out, payload).expect("build");
         out
+    }
+
+    fn framed(dns: &[u8]) -> Vec<u8> {
+        let mut payload = u16::try_from(dns.len())
+            .expect("len")
+            .to_be_bytes()
+            .to_vec();
+        payload.extend_from_slice(dns);
+        payload
+    }
+
+    fn tcp_query(dns: &[u8], seq: u32, ack: u32) -> Vec<u8> {
+        tcp_segment(&framed(dns), seq, ack)
+    }
+
+    #[test]
+    fn split_tcp_query_is_reassembled_and_reset() {
+        // Windows nslookup -vc may send the length prefix and the message
+        // in separate segments.
+        let p = policy(DnsBlockingMode::NullIp);
+        let mut state = TcpReassembly::default();
+        let dns = dns_query("ads.example.", RecordType::A, 9);
+        let data = framed(&dns);
+        let first = tcp_segment(&data[..2], 1000, 5000);
+        let second = tcp_segment(&data[2..], 1002, 5000);
+
+        let decision = super::decide(&first, &p, &mut state);
+        assert_eq!(decision, Decision::pass());
+        let decision = super::decide(&second, &p, &mut state);
+        assert_eq!(
+            decision.query,
+            Some(QueryInfo {
+                domain: "ads.example".to_owned(),
+                blocked: true
+            })
+        );
+        let sliced = SlicedPacket::from_ip(expect_reply(&decision)).expect("reply");
+        match &sliced.transport {
+            Some(TransportSlice::Tcp(tcp)) => {
+                assert!(tcp.rst());
+                assert_eq!(tcp.sequence_number(), 5000);
+                assert_eq!(
+                    tcp.acknowledgment_number(),
+                    1002 + u32::try_from(dns.len()).expect("len")
+                );
+            }
+            other => panic!("expected TCP, got {other:?}"),
+        }
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn split_allowed_tcp_query_passes_with_info() {
+        let p = policy(DnsBlockingMode::NullIp);
+        let mut state = TcpReassembly::default();
+        let data = framed(&dns_query("example.org.", RecordType::A, 3));
+        assert_eq!(
+            super::decide(&tcp_segment(&data[..2], 1, 1), &p, &mut state),
+            Decision::pass()
+        );
+        let decision = super::decide(&tcp_segment(&data[2..], 3, 1), &p, &mut state);
+        assert_eq!(decision.action, Action::Pass);
+        assert_eq!(
+            decision.query.map(|q| (q.domain, q.blocked)),
+            Some(("example.org".to_owned(), false))
+        );
     }
 
     #[test]

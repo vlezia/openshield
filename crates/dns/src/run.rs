@@ -12,6 +12,7 @@ use openshield_core::watchdog::Heartbeat;
 use openshield_intercept::{InterceptError, Interceptor};
 
 use crate::packet::{self, Action, Policy};
+use crate::tcp::TcpReassembly;
 
 /// Large enough for any packet WinDivert can return.
 pub const PACKET_BUFFER: usize = 40 + 0xFFFF;
@@ -30,6 +31,9 @@ pub struct LoopOptions {
 pub struct LoopSummary {
     pub packets: u64,
     pub replies: u64,
+    /// Replies that could not be sent, so the original packet was let
+    /// through instead (fail open).
+    pub reply_fallbacks: u64,
     pub send_errors: u64,
 }
 
@@ -45,6 +49,7 @@ pub fn run<I: Interceptor>(
     let _ = options; // only read with fault injection
     let mut buf = vec![0u8; PACKET_BUFFER];
     let mut summary = LoopSummary::default();
+    let mut tcp_state = TcpReassembly::default();
     loop {
         let (len, meta) = match interceptor.recv(&mut buf) {
             Ok(received) => received,
@@ -66,7 +71,7 @@ pub fn run<I: Interceptor>(
         }
 
         let packet = &buf[..len];
-        let decision = packet::decide(packet, &policy.load());
+        let decision = packet::decide(packet, &policy.load(), &mut tcp_state);
         if let Some(query) = &decision.query {
             stats.record(&query.domain, query.blocked);
         }
@@ -76,9 +81,11 @@ pub fn run<I: Interceptor>(
                 summary.replies += 1;
                 // If the forged answer cannot be sent, let the original
                 // query through rather than losing it (fail open).
-                interceptor
-                    .inject_reply(reply, &meta)
-                    .or_else(|_| interceptor.reinject(packet, &meta))
+                interceptor.inject_reply(reply, &meta).or_else(|e| {
+                    summary.reply_fallbacks += 1;
+                    tracing::debug!("reply injection failed, passing original: {e}");
+                    interceptor.reinject(packet, &meta)
+                })
             }
         };
         heartbeat.end();
@@ -159,8 +166,9 @@ mod tests {
     fn policy_can_be_swapped_while_running() {
         let policy = ArcSwap::from_pointee(policy(DnsBlockingMode::NullIp));
         let packet = udp_v4(&dns_query("ads.example.", RecordType::A, 1));
+        let mut tcp = TcpReassembly::default();
         assert!(matches!(
-            packet::decide(&packet, &policy.load()).action,
+            packet::decide(&packet, &policy.load(), &mut tcp).action,
             Action::Reply(_)
         ));
         policy.store(Arc::new(Policy {
@@ -168,6 +176,9 @@ mod tests {
             mode: DnsBlockingMode::NullIp,
             blocked_ttl: 10,
         }));
-        assert_eq!(packet::decide(&packet, &policy.load()).action, Action::Pass);
+        assert_eq!(
+            packet::decide(&packet, &policy.load(), &mut tcp).action,
+            Action::Pass
+        );
     }
 }

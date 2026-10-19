@@ -281,8 +281,8 @@ async fn run_async(args: ConsoleArgs) -> Result<ExitCode, String> {
         match result_rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Ok(summary)) => {
                 info!(
-                    "packet loop finished: {} packets, {} answered, {} send errors",
-                    summary.packets, summary.replies, summary.send_errors
+                    "packet loop finished: {} packets, {} answered, {} answers failed (original passed), {} send errors",
+                    summary.packets, summary.replies, summary.reply_fallbacks, summary.send_errors
                 );
                 ExitCode::SUCCESS
             }

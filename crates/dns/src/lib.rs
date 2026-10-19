@@ -8,6 +8,7 @@
 
 pub mod packet;
 pub mod run;
+pub mod tcp;
 
 /// Standard DNS port, captured for both UDP and TCP.
 pub const DNS_PORT: u16 = 53;

@@ -53,7 +53,7 @@ from the repository root.
 | 2 | In a second window: `nslookup doubleclick.net` | `Address: 0.0.0.0` |
 | 3 | `Resolve-DnsName ad.doubleclick.net -Type AAAA` | `::` |
 | 4 | `Resolve-DnsName use-application-dns.net` | NXDOMAIN (DNS name does not exist) |
-| 5 | `nslookup -vc doubleclick.net` (DNS over TCP) | Fails (connection reset), no real address |
+| 5 | `nslookup -vc doubleclick.net` (DNS over TCP) | Fails (connection reset), no real address. If real addresses come back: rerun step 1 with `-v`, repeat, stop with Ctrl+C and report `reply injection failed` lines and the `packet loop finished` line |
 | 6 | `Resolve-DnsName github.com`; open a few websites | Real addresses; sites work |
 | 7 | Wait for a stats line | Totals and top blocked/queried domains |
 | 8 | Fail open on kill: `taskkill /F /IM openshield-service.exe`, then `ipconfig /flushdns` and `nslookup doubleclick.net` | Real address (filtering gone), internet works |
